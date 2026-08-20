@@ -1,0 +1,28 @@
+# Pipeline configuration. Paths relative to the repo root.
+
+data:
+  processed_dir: data/processed
+  artifacts_dir: data/artifacts
+  n_tickets: 4000
+  seed: 42
+
+triage:
+  test_frac: 0.3
+  categories: [billing, bug, how_to, account_access, feature_request, performance]
+  priority_weights:          # priority score inputs
+    sentiment_negative: 0.35
+    plan_enterprise: 0.30
+    outage_keywords: 0.35
+
+retrieval:
+  top_k: 5
+  rrf_k: 60
+
+kb:
+  articles_dir: data/kb
+
+drafts:
+  max_tokens: 500
+
+eval:
+  experiment_name: supportpilot
