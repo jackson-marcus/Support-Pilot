@@ -1,4 +1,4 @@
-# SupportPilot — Autonomous Customer Support Triage & Drafting Agent
+# SupportPilot — Support Triage & Drafting (ASGI Onion Middleware Architecture)
 
 <div align="center">
 
@@ -13,88 +13,84 @@
 
 </div>
 
-> **Production customer support agent: calibrated multi-label intent classification, SLA priority matrix scoring, similar historical ticket retrieval, and knowledge-base grounded response drafting.**
+> **Customer support triage and grounded response drafting agent architected as an ASGI-Style Onion Middleware Pipeline — wrapping ticket contexts with composable layers for input sanitization, sentiment analysis, TF-IDF category routing, SLA priority scoring, and knowledge base retrieval.**
 
 ---
 
-## 📖 Executive Summary & Value Proposition
+## 🏛️ Architecture Pattern: ASGI-Style Onion Middleware Pipeline Architecture
 
-**`supportpilot`** is a production-grade, end-to-end machine learning system built with strict engineering discipline, reproducible pipelines, and enterprise MLOps best practices. It bridges the gap between theoretical statistical rigor and high-availability operational microservices.
+Customer support triage pipelines require preprocessing, sentiment analysis, classification, priority matrix calculation, and knowledge retrieval before reaching the final draft generator. Procedural chaining leads to brittle code where inserting a guardrail or audit layer disrupts downstream logic.
 
-## 🎧 Core Methodologies & System Architecture
-
-### 1. Calibrated Multi-Label Intent Classification
-- Multi-label classification categorizing incoming tickets into intent categories, product components, and sentiment urgency.
-
-### 2. SLA Priority Matrix Scoring
-- Computes ticket priority score dynamically factoring customer tier, churn risk, and sentiment degradation velocity.
-
-### 3. Similar-Ticket Retrieval Engine
-- Dense vector similarity search over historical resolved tickets to surface proven resolution runbooks for support agents.
-
-### 4. Grounded Knowledge-Base Draft Generation
-- Synthesizes polite, accurate resolution drafts citing official documentation articles with zero hallucinated URLs.
-
-## 📊 Architecture & Pipeline
+`supportpilot` structures the execution lifecycle as an **Onion Middleware Stack** where each layer intercepts request and response phases:
 
 ```mermaid
-flowchart LR
-    Ticket[Incoming Customer Ticket] --> Class[Multi-Label Intent & Sentiment Classifier]
-    Ticket --> Score[Priority Matrix Scorer]
-    Ticket --> Sim[Similar Ticket Vector Retrieval]
-    Ticket --> KB[Knowledge-Base Grounded Drafter]
-    Class & Score & Sim & KB --> API[FastAPI :8090] --> UI[Streamlit Support Workbench :8591]
+sequenceDiagram
+    autonumber
+    actor Client as Support Agent / Webhook
+    participant M1 as InputSanitizationMiddleware
+    participant M2 as SentimentScoringMiddleware
+    participant M3 as CategoryClassifierMiddleware
+    participant M4 as SLAPriorityMiddleware
+    participant Terminal as Terminal Drafting Handler
+
+    Client->>M1: TicketContext (raw input)
+    M1->>M1: Sanitize text & strip dangerous chars
+    M1->>M2: TicketContext (sanitized)
+    M2->>M2: Extract polarity & negative cues
+    M2->>M3: TicketContext (sentiment added)
+    M3->>M3: TF-IDF classification & confidence
+    M3->>M4: TicketContext (category assigned)
+    M4->>M4: Compute priority score & SLA band (P1-P4)
+    M4->>Terminal: TicketContext (fully enriched)
+    Terminal->>Terminal: Retrieve KB docs & synthesize draft
+    Terminal-->>M4: Return TicketContext (with draft)
+    M4-->>M3: Return TicketContext
+    M3-->>M2: Return TicketContext
+    M2-->>M1: Return TicketContext
+    M1-->>Client: Final Triage Result & Draft
 ```
 
-## 🛠️ Tech Stack & Engineering Standards
-- **AI & NLP:** Python 3.12, Scikit-Learn, Sentence-Transformers, Anthropic Claude / Ollama
-- **Serving & UI:** FastAPI, Streamlit, MLflow
-- **Testing:** Pytest coverage across triage rules, retrieval accuracy, and draft generation
+### Middleware Pipeline Features
+- **Bidirectional Onion Interception**: Layers can inspect/mutate `TicketContext` both on entry and exit.
+- **Short-Circuiting**: Layers (e.g. rate limiters, policy blockers) can halt execution immediately without calling `call_next`.
+- **Trace Transparency**: `ctx.trace` records exact enter/exit timestamps and stage transformations for auditability.
 
+### Module Organization
+- **`middleware/context.py`**: `TicketContext` carrying mutable enrichment state.
+- **`middleware/base.py`**: `Middleware` protocol and `MiddlewareStack` onion builder.
+- **`middleware/layers.py`**: Concrete layers (`InputSanitization`, `SentimentScoring`, `CategoryClassifier`, `SLAPriority`).
+- **`triage/`**: Machine learning classifiers and priority scorecard formulas.
+- **`drafts/`**: Grounded knowledge-base draft generation.
+
+---
+
+## 🎧 Core Methodologies & SLA Scoring
+
+### 1. Calibrated Multi-Label Classification
+- Combines TF-IDF n-gram vectors with calibrated logistic regression to route tickets into billing, technical, account, or general queues.
+
+### 2. SLA Priority Scorecard
+- Computes priority score dynamically factoring sentiment urgency, enterprise plan tier, and outage keywords:
+  $$\text{Priority} = w_s \cdot \max(-\text{Sentiment}, 0) + w_p \cdot \text{PlanWeight} + w_o \cdot \text{OutageFlag}$$
 
 ---
 
 ## 🚀 Quickstart & Setup Guide
 
-### 1. Prerequisites & Environment Setup
-Using **[uv](https://docs.astral.sh/uv/)** for lightning-fast, reproducible dependency resolution:
-
 ```bash
-# Clone the repository
 git clone https://github.com/jackson-marcus/supportpilot.git
 cd supportpilot
 
-# Install dependencies and pre-commit hooks
+$env:UV_CACHE_DIR = "D:\ml-projects\.uv-cache"
 uv sync --group dev
-```
 
-### 2. Run Test Suite & Code Quality Checks
-```bash
-# Run unit & integration tests with coverage
-uv run pytest --cov
-
-# Run ruff linter and formatting checks
+# Run unit tests and middleware verification
+uv run pytest -q
 uv run ruff check .
-uv run ruff format --check .
-```
 
-### 3. Launch Services Locally
-```bash
-# Start FastAPI REST API (listening on port :8090)
+# Launch FastAPI (port :8090) + Streamlit workbench (port :8591)
 make api
-# Or: uv run uvicorn supportpilot.api.main:app --reload --port 8090
-
-# Start interactive Streamlit dashboard (listening on port :8591)
 make ui
-
-# Launch local MLflow Experiment Tracking UI (listening on port :5009)
-make mlflow
-```
-
-### 4. Run with Docker Compose
-```bash
-# Spin up the complete microservice stack
-docker compose up --build
 ```
 
 ---
@@ -103,20 +99,18 @@ docker compose up --build
 
 ```
 supportpilot/
-├── .github/workflows/ci.yml       # GitHub Actions CI pipeline (lint, test, build)
-├── configs/                      # Configuration files and hyperparameters
-├── data/                         # Data directory (raw, interim, processed)
-├── scripts/                      # Data generators and operational scripts
-├── src/supportpilot/               # Core Python package
-│   ├── api/                      # FastAPI routes, schemas, and endpoints
-│   ├── models/                   # Statistical models, ML algorithms, and estimators
-│   ├── ui/                       # Streamlit interactive application
-│   └── settings.py               # Centralized configuration & environment loader
-├── tests/                        # Comprehensive Pytest suite
-├── docker-compose.yml            # Multi-service container orchestration
-├── Dockerfile                    # Container definition for API service
-├── Makefile                      # Standardized project tasks
-└── pyproject.toml                # Pinned dependencies and tool configs
+├── configs/                      # Triage thresholds, SLA weights, LLM prompts
+├── data/                         # Support ticket dataset and knowledge base
+├── src/supportpilot/             # Core Python package
+│   ├── middleware/               # Onion Middleware Pipeline: context, stack, layers
+│   ├── triage/                   # Classifier training, inference, priority scoring
+│   ├── retrieval/                # Similar ticket & knowledge base vector store
+│   ├── drafts/                   # Response synthesizer with citation grounding
+│   ├── api/                      # FastAPI REST endpoints
+│   └── ui/                       # Streamlit support workbench
+├── tests/                        # Comprehensive Pytest suite covering middleware and triage
+├── docker-compose.yml
+└── pyproject.toml
 ```
 
 ---
@@ -128,5 +122,20 @@ supportpilot/
 - **Upwork:** [Jackson Marcus on Upwork](https://www.upwork.com/freelancers/~012235717501ad9c7b)
 - **GitHub:** [@jackson-marcus](https://github.com/jackson-marcus)
 
-*Available for machine learning engineering, MLOps, data science, and AI system architecture consulting and contract engagements.*
+---
 
+## 👨‍💻 Author & Maintainer
+
+<div align="center">
+
+### **Jackson Marcus**
+**Senior AI & Machine Learning Engineer**
+*Building Production-Grade ML Systems, Agentic Architectures & Scalable Data Pipelines*
+
+[![GitHub Profile](https://img.shields.io/badge/GitHub-jackson--marcus-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/jackson-marcus)
+[![Upwork Portfolio](https://img.shields.io/badge/Upwork-Top%20Rated%20Plus-14A800?style=for-the-badge&logo=upwork&logoColor=white)](https://www.upwork.com/freelancers/~012235717501ad9c7b)
+[![Email Contact](https://img.shields.io/badge/Email-wajahatanees41%40gmail.com-D14836?style=for-the-badge&logo=gmail&logoColor=white)](mailto:wajahatanees41@gmail.com)
+
+📍 *Byron, GA, USA*
+
+</div>
