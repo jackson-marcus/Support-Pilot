@@ -17,8 +17,6 @@
 
 </div>
 
-> **Portfolio project.** Built to demonstrate the onion-middleware pattern and a practical support-triage stack on synthetic data. Not hardened for production use.
-
 ---
 
 ## The problem
@@ -67,6 +65,66 @@ sequenceDiagram
 - **Concrete layers** (`middleware/layers.py`) — `InputSanitization`, `SentimentScoring`, `CategoryClassifier`, `SLAPriority`. They delegate the heavy lifting to the `triage` module, so the same logic backs both the pipeline and the API.
 
 > The FastAPI `/triage` endpoint orchestrates the same stages directly; the `MiddlewareStack` is the reusable composition abstraction (exercised end-to-end in the test suite, including short-circuiting).
+
+## Staged triage
+
+`/triage` runs the whole pass before it answers anything, so the agent waits on
+the slowest part of it. The stages are wildly uneven:
+
+| Stage | Work |
+|---|---|
+| `classify` | TF-IDF + calibrated linear model, local |
+| `priority` | the scorecard, arithmetic on three cues |
+| `similar` | lexical + embedding retrieval over resolved tickets |
+| `draft_reply` | **a call out to a language model** |
+
+`/triage/stream` emits each stage as it completes, so the category and the queue
+position reach a human immediately rather than behind the draft. The stream is
+a generator all the way down — the classification is genuinely delivered before
+the model has been asked for anything, which a test pins by asserting the
+provider has recorded no calls after the first event.
+
+### The gate on the expensive stage
+
+Streaming makes a second thing possible: not running the last stage at all.
+A drafted reply is grounded in KB articles chosen by the *predicted* category,
+so a low-confidence classification yields a confident-sounding reply grounded in
+the wrong article — worse than no reply. `supportpilot.triage.routing` refuses
+the draft when:
+
+- the predicted category is one configured as never-auto-replied (`billing` by
+  default: money questions get a person), or
+- the category confidence is below `min_confidence` (0.55), because the KB the
+  reply would cite was selected by a guess.
+
+Over a 1,200-ticket holdout from the synthetic corpus:
+
+```
+policy: min_confidence=0.55, never_categories=['billing']
+mean category confidence 0.893
+
+  drafted automatically :   918
+  escalated to a human  :   282   (23.5% of model calls avoided)
+
+  escalation reasons:
+    never_category     206
+    low_confidence      76
+```
+
+Roughly a quarter of tickets never reach the model, and the agent is told which
+rule fired and why. Reproduce with:
+
+```bash
+uv run python scripts/routing_study.py
+```
+
+An escalated ticket still gets everything cheap: category, priority band, and
+similar resolved tickets, which is the precedent a human actually wants.
+
+```bash
+curl -N -X POST http://localhost:8090/triage/stream -H 'Content-Type: application/json' \
+  -d '{"text": "Production is down and the dashboard 500s on save", "plan": "enterprise", "sentiment": -0.7}'
+```
 
 ## Methodology
 
@@ -139,6 +197,8 @@ curl -s localhost:8090/triage -H 'content-type: application/json' -d '{
 |---|---|---|
 | `GET` | `/health` | Liveness check + active LLM provider |
 | `POST` | `/triage` | Full pass: classify + priority + similar tickets, plus a draft when `draft: true` |
+| `POST` | `/triage/stream` | The same pass as `text/event-stream`, one event per stage, draft last |
+| `POST` | `/triage/staged` | The staged pass as one JSON body, with per-stage timings and the routing decision |
 | `POST` | `/similar` | Similar resolved tickets for a given text |
 
 ## Evaluation
@@ -162,6 +222,7 @@ make test                                        # uv run pytest --cov
 - `test_triage.py` — classification and the priority scorecard/bands
 - `test_retrieval_drafts.py` — hybrid retrieval and grounded drafting
 - `test_api.py` — HTTP contract
+- `test_realtime_streaming.py` — the staged pass: the routing gate, that the model is not called before the first stage is delivered, that an escalated ticket never reaches it at all, and the SSE contract
 
 ## Limitations
 
@@ -169,12 +230,18 @@ make test                                        # uv run pytest --cov
 - Sentiment scoring is a small cue-word heuristic, not a trained model — a stand-in for a real sentiment service.
 - KB grounding uses token-overlap matching over a handful of seeded articles; it is not a production retrieval layer.
 - Draft quality depends on the configured LLM provider; the default `fake` provider is for offline development only.
+- The auto-reply gate is a confidence threshold plus a category denylist, not a learned abstention policy. `min_confidence` was chosen as a round number, not tuned against the cost of a wrong reply.
+- Calibrated confidence is not correctness: a ticket can be classified confidently and wrongly, and the gate will let it through.
+- The stream is staged, not incremental within a stage. The draft arrives whole rather than token by token, even though the provider contract supports `stream()`.
+- The `similar` stage pays a one-off cold start: the first call downloads the ONNX embedding model. Measured on this machine at roughly 215 s cold against 48 ms warm, which is a strong argument for emitting `classify` (about 200 ms) without waiting for it.
 
 ## Project structure
 
 ```
 src/supportpilot/
 ├── middleware/   # Onion stack: TicketContext, MiddlewareStack, concrete layers (the core pattern)
+├── pubsub/       # in-process broker; the subscriber runs the staged pass
+├── gateway/      # ticket frame handler and the SSE stage projection
 ├── triage/       # TF-IDF + calibrated classifier, priority scorecard, training
 ├── retrieval/    # Hybrid dense + BM25 similar-ticket search with RRF fusion
 ├── drafts/       # KB-grounded reply drafting

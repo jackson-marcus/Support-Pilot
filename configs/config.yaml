@@ -9,6 +9,9 @@ data:
 triage:
   test_frac: 0.3
   categories: [billing, bug, how_to, account_access, feature_request, performance]
+  auto_reply:                # gate on the expensive draft stage
+    min_confidence: 0.55     # below this the category is a guess, so the KB picked would be wrong
+    never_categories: [billing]   # money questions get a human regardless of confidence
   priority_weights:          # priority score inputs
     sentiment_negative: 0.35
     plan_enterprise: 0.30
