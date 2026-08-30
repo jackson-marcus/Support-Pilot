@@ -31,9 +31,10 @@ class LLMProvider(Protocol):
 class FakeProvider:
     """Deterministic provider for tests and offline development.
 
-    Supports a scripted-response queue: each call pops the next response, so
-    tests can simulate "bad SQL first, corrected SQL second" and exercise the
-    agent's self-correction loop. With no script, echoes the first prompt line.
+    Supports a scripted-response queue: each call pops the next response, so a
+    test can stage a sequence of draft replies and assert how the triage
+    middleware pipeline consumes them. With no script, echoes the first prompt
+    line so the retrieval-to-draft wiring stays inspectable.
     """
 
     name = "fake"
